@@ -1,0 +1,19 @@
+# runtime / generated
+var/
+public/runs/
+
+# secrets
+creds/
+
+# logs
+*.log
+
+# editor/OS junk
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# temp
+tmp/
+*.tmp

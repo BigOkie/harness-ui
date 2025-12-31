@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ShieldConex iFrame — Env + Template Selector</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --pad: 14px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 2rem; }
+    h1 { margin-bottom: .5rem; }
+    .grid { display: grid; gap: .75rem; grid-template-columns: 1fr; max-width: 780px; }
+    .row { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+    .field { display: grid; gap: .35rem; }
+    label { font-weight: 600; }
+    input[type="text"], select {
+      padding: .55rem .65rem; border: 1px solid #d0d7de; border-radius: 8px; width: 100%;
+    }
+    .btn {
+      padding: .6rem 1rem; border: 1px solid #d0d7de; border-radius: 10px; background: #fafafa; cursor: pointer;
+    }
+    .btn:hover { background: #f0f0f0; }
+    .frame-wrap { max-width: 680px; margin-top: 1rem; }
+    .status { margin-top: 1rem; padding: var(--pad); border-radius: 10px; background: #f7faff; border: 1px solid #dbe7ff; }
+    .token { margin-top: .6rem; padding: var(--pad); background: #f9f9f9; border: 1px dashed #ccc; border-radius: 10px; display: none; }
+    code { word-break: break-all; }
+    .hint { color: #666; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <h1>ShieldConex iFrame Demo</h1>
+  <div class="hint">Pick your environment, set the BASE_URLs you want, enter your template reference, then click <em>Render iFrame</em>.</div>
+
+  <div class="grid" style="margin-top:1rem;">
+    <div class="field">
+      <label for="templateId">Template reference</label>
+      <input id="templateId" type="text" placeholder="e.g., my-template-01 or GUID" />
+    </div>
+
+    <div class="row">
+      <div class="field" style="min-width:220px; flex:1;">
+        <label for="envSelect">Environment</label>
+        <select id="envSelect">
+          <option value="staging">Staging</option>
+          <option value="cert" selected>Certification</option>
+          <option value="prod">Production</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+
+      <div class="field" style="min-width:320px; flex:2;">
+        <label for="baseUrl">BASE_URL for selected environment</label>
+        <input id="baseUrl" type="text" placeholder="https://your-env.example.com" />
+        <div class="hint">This URL will be used for both the SDK and the iFrame (e.g., <code>https://secure-cert.shieldconex.com</code>).</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="savePrefs" class="btn" type="button">Save URLs</button>
+      <button id="render" class="btn" type="button">Render iFrame</button>
+      <button id="tokenize" class="btn" type="button">Tokenize</button>
+      <button id="clear" class="btn" type="button">Clear</button>
+    </div>
+  </div>
+
+  <div class="frame-wrap" id="frameWrap" aria-live="polite">
+    <div id="frameContainer"><!-- iFrame renders here --></div>
+  </div>
+
+  <div class="status">
+    <div><strong>Status:</strong> <span id="status">Waiting for input…</span></div>
+    <div style="margin-top: .35rem;" class="hint">SDK source: <code id="sdkSrc">—</code></div>
+    <div class="token" id="tokenBox">
+      <div><strong>BFID:</strong> <code id="bfid">—</code></div>
+    </div>
+  </div>
+
+  <script>
+    // --- Preferences (editable defaults). You can overwrite these and click "Save URLs" to persist in localStorage.
+    const DEFAULT_URLS = {
+      staging: "https://secure-staging.shieldconex.com",   // <- replace with your staging URL
+      cert:    "https://secure-cert.shieldconex.com",
+      prod:    "https://secure.shieldconex.com",
+      custom:  "https://example.com"
+    };
+
+    const LS_KEY = "scx-env-prefs-v1";
+
+    // State
+    let scxInstance = null;           // active ShieldconexIFrame instance
+    let loadedSdks = new Map();       // baseUrl -> Promise that resolves when SDK is loaded
+
+    // UI elements
+    const templateIdEl = document.getElementById("templateId");
+    const envSelectEl  = document.getElementById("envSelect");
+    const baseUrlEl    = document.getElementById("baseUrl");
+    const sdkSrcEl     = document.getElementById("sdkSrc");
+    const statusEl     = document.getElementById("status");
+    const tokenBoxEl   = document.getElementById("tokenBox");
+    const bfidEl       = document.getElementById("bfid");
+    const frameContainerEl = document.getElementById("frameContainer");
+
+    // Load prefs from localStorage or defaults
+    const prefs = loadPrefs();
+
+    // Initialize UI from prefs
+    function initForm() {
+      envSelectEl.value = prefs.selectedEnv || "cert";
+      baseUrlEl.value = (prefs.urls && prefs.urls[envSelectEl.value]) || DEFAULT_URLS[envSelectEl.value];
+      templateIdEl.value = prefs.templateId || "";
+      updateSdkSrcHint();
+    }
+
+    function loadPrefs() {
+      try {
+        const raw = localStorage.getItem(LS_KEY);
+        if (!raw) return { urls: { ...DEFAULT_URLS }, selectedEnv: "cert", templateId: "" };
+        const parsed = JSON.parse(raw);
+        return {
+          urls: { ...DEFAULT_URLS, ...(parsed.urls || {}) },
+          selectedEnv: parsed.selectedEnv || "cert",
+          templateId: parsed.templateId || ""
+        };
+      } catch {
+        return { urls: { ...DEFAULT_URLS }, selectedEnv: "cert", templateId: "" };
+      }
+    }
+
+    function savePrefs() {
+      const toSave = {
+        urls: { ...prefs.urls },
+        selectedEnv: envSelectEl.value,
+        templateId: templateIdEl.value.trim()
+      };
+      // Ensure the currently shown URL is saved for the selected env
+      toSave.urls[envSelectEl.value] = baseUrlEl.value.trim();
+      localStorage.setItem(LS_KEY, JSON.stringify(toSave));
+      setStatus("Preferences saved.");
+    }
+
+    // When env changes, populate the URL field
+    envSelectEl.addEventListener("change", () => {
+      const env = envSelectEl.value;
+      baseUrlEl.value = (prefs.urls && prefs.urls[env]) || DEFAULT_URLS[env];
+      updateSdkSrcHint();
+    });
+
+    // Show where we'll load the SDK from
+    function updateSdkSrcHint() {
+      const base = baseUrlEl.value.trim();
+      sdkSrcEl.textContent = base ? `${base}/js/iframe.api.v1.js` : "—";
+    }
+
+    // Helpers
+    function setStatus(msg) { statusEl.textContent = msg; }
+    function showBfid(tok) { tokenBoxEl.style.display = "block"; bfidEl.textContent = tok; }
+    function hideBfid() { tokenBoxEl.style.display = "none"; bfidEl.textContent = ""; }
+    function clearFrame() { frameContainerEl.innerHTML = ""; }
+
+    // Dynamically load the SDK from the chosen BASE_URL
+    function ensureSdkLoaded(baseUrl) {
+      if (loadedSdks.has(baseUrl)) return loadedSdks.get(baseUrl);
+
+      const p = new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = `${baseUrl.replace(/\/+$/, "")}/js/iframe.api.v1.js`;
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error(`Failed to load SDK from ${script.src}`));
+        document.head.appendChild(script);
+      });
+
+      loadedSdks.set(baseUrl, p);
+      return p;
+    }
+
+    // Render the iFrame with current form values
+    async function renderFrame() {
+      const templateId = templateIdEl.value.trim();
+      const baseUrl = baseUrlEl.value.trim().replace(/\/+$/, "");
+
+      if (!templateId) {
+        setStatus("Please enter a template reference.");
+        return;
+      }
+      if (!/^https?:\/\//i.test(baseUrl)) {
+        setStatus("BASE_URL must start with http:// or https://");
+        return;
+      }
+
+      setStatus("Loading SDK…");
+      updateSdkSrcHint();
+
+      try {
+        await ensureSdkLoaded(baseUrl);
+      } catch (e) {
+        setStatus(e.message || String(e));
+        return;
+      }
+
+      // Clear previous frame & instance
+      hideBfid();
+      clearFrame();
+      scxInstance = null;
+
+      // Create a container div for the iframe
+      const targetId = "scx-target-" + Date.now();
+      const target = document.createElement("div");
+      target.id = targetId;
+      frameContainerEl.appendChild(target);
+
+      // Create the iFrame instance
+      try {
+        scxInstance = new ShieldconexIFrame({
+          baseUrl,
+          templateId,
+          parent: targetId,
+          attributes: {
+            width: "640px",
+            height: "280px",
+            frameborder: 0,
+            title: "ShieldConex Secure Entry Frame"
+          }
+        });
+
+        scxInstance.onRendered = function () {
+          setStatus(`iFrame rendered for ${templateId} @ ${baseUrl}`);
+        };
+        scxInstance.onToken = function (_echo, bfid) {
+          showBfid(bfid);
+          setStatus("BFID received (no server call).");
+          console.log("BFID:", bfid);
+        };
+        scxInstance.onError = function (_echo, errors) {
+          console.error("ShieldConex error:", errors);
+          setStatus("Error: " + JSON.stringify(errors));
+        };
+
+        scxInstance.render();
+      } catch (e) {
+        setStatus("Failed to initialize iFrame: " + (e?.message || e));
+      }
+    }
+
+    // Programmatic tokenize/clear
+    function doTokenize() {
+      if (!scxInstance) { setStatus("Render the iFrame first."); return; }
+      try {
+        if (typeof scxInstance.tokenize === "function") {
+          scxInstance.tokenize("demo-" + Date.now(), { source: "ui-button" });
+          setStatus("Tokenizing…");
+        } else {
+          setStatus("Programmatic tokenize not available; submit inside the iFrame.");
+        }
+      } catch (e) {
+        setStatus("Tokenize call failed: " + e.message);
+      }
+    }
+
+    function doClear() {
+      if (!scxInstance) { setStatus("Render the iFrame first."); return; }
+      try {
+        if (typeof scxInstance.clear === "function") {
+          scxInstance.clear("clear-" + Date.now());
+          hideBfid();
+          setStatus("Cleared iFrame fields.");
+        } else {
+          setStatus("Clear not available; reload page to reset.");
+        }
+      } catch (e) {
+        setStatus("Clear failed: " + e.message);
+      }
+    }
+
+    // Wire up UI
+    document.getElementById("savePrefs").addEventListener("click", () => {
+      // Save current baseUrl to the selected env
+      const env = envSelectEl.value;
+      prefs.urls = prefs.urls || { ...DEFAULT_URLS };
+      prefs.urls[env] = baseUrlEl.value.trim();
+      prefs.selectedEnv = env;
+      prefs.templateId = templateIdEl.value.trim();
+      savePrefs();
+    });
+    document.getElementById("render").addEventListener("click", renderFrame);
+    document.getElementById("tokenize").addEventListener("click", doTokenize);
+    document.getElementById("clear").addEventListener("click", doClear);
+    baseUrlEl.addEventListener("input", updateSdkSrcHint);
+
+    // Boot
+    initForm();
+    setStatus("Ready. Enter template & choose environment.");
+  </script>
+</body>
+</html>
