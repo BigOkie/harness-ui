@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 session_start();
@@ -12,37 +13,79 @@ function fail(int $code, string $msg): never
     exit;
 }
 
+function failHtml(int $code, string $title, string $msg): never
+{
+    http_response_code($code);
+    header('Content-Type: text/html; charset=utf-8');
+    echo "<!doctype html><html><head><meta charset='utf-8'><title>"
+        . htmlspecialchars($title)
+        . "</title></head><body style='font-family:sans-serif;margin:24px'>"
+        . "<h3>" . htmlspecialchars($title) . "</h3>"
+        . "<p>" . htmlspecialchars($msg) . "</p>"
+        . "<p><a href='/rest.php'>Back to REST runner</a></p>"
+        . "</body></html>";
+    exit;
+}
+
+if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+    failHtml(405, 'Method not allowed', 'This endpoint expects a POST from the REST runner form.');
+}
+
 if (($_POST['csrf'] ?? '') !== ($_SESSION['csrf'] ?? '')) {
     fail(403, 'CSRF failed');
 }
 
 $env      = (string)($_POST['env'] ?? '');
 $scenario = basename((string)($_POST['scenario'] ?? ''));
-$user     = trim((string)($_POST['username'] ?? ''));
-$pass     = (string)($_POST['password'] ?? '');
 $profile  = (string)($_POST['profile'] ?? '');
 
-// Optional: load profile if selected
+$authMode = strtolower(trim((string)($_POST['auth_mode'] ?? 'basic')));
+if (!in_array($authMode, ['basic', 'hmac'], true)) {
+    $authMode = 'basic';
+}
+
+// Manual fields (we keep both sets; which set is required depends on authMode)
+$basicUser = trim((string)($_POST['basic_username'] ?? ''));
+$basicPass = (string)($_POST['basic_password'] ?? '');
+
+$hmacUser  = trim((string)($_POST['hmac_username'] ?? ''));
+$hmacSecret = (string)($_POST['hmac_secret'] ?? '');
+
+// Optional: load profile if selected (populate whichever keys exist)
 if ($profile !== '') {
-    $credsDir     = (string)($config['creds_dir'] ?? '');
-    $profileFile  = $credsDir . '/' . basename($profile) . '.php';
+    $credsDir    = (string)($config['creds_dir'] ?? '');
+    $profileFile = $credsDir . '/' . basename($profile) . '.php';
     if (is_file($profileFile)) {
         $p = require $profileFile;
-        if (is_array($p) && isset($p['username'], $p['password'])) {
-            $user = (string)$p['username'];
-            $pass = (string)$p['password'];
+        if (is_array($p)) {
+            if (isset($p['username'], $p['password'])) {
+                $basicUser = (string)$p['username'];
+                $basicPass = (string)$p['password'];
+            }
+            if (isset($p['hmac_username'], $p['hmac_secret'])) {
+                $hmacUser   = (string)$p['hmac_username'];
+                $hmacSecret = (string)$p['hmac_secret']; // pass-through as-is (no decoding)
+            }
         }
     }
 }
 
-if (!isset(($config['rest_envs'] ?? [])[$env])) {
+$restEnvs = $config['rest_envs'] ?? null;
+if (!is_array($restEnvs) || !isset($restEnvs[$env])) {
     fail(400, 'Invalid env');
 }
 if ($scenario === '') {
     fail(400, 'Missing scenario');
 }
-if ($user === '' || $pass === '') {
-    fail(400, 'Missing username/password');
+
+if ($authMode === 'basic') {
+    if ($basicUser === '' || $basicPass === '') {
+        fail(400, 'Missing basic username/password');
+    }
+} else {
+    if ($hmacUser === '' || $hmacSecret === '') {
+        fail(400, 'Missing HMAC username/secret');
+    }
 }
 
 // Paths
@@ -88,13 +131,20 @@ $meta = [
     'startedAtUtc' => gmdate('c'),
     'harness' => 'rest',
     'env' => $env,
-    'url' => (string)($config['rest_envs'][$env] ?? ''),
+    'url' => (string)($restEnvs[$env] ?? ''),
     'scenario' => $scenario,
-    'username' => $user,
+    'authMode' => $authMode,
     'cwd' => $restDir,
     'runner' => $runner,
     'csvLog' => $csvPath,
 ];
+
+// Store *only* non-secret identity info
+if ($authMode === 'basic') {
+    $meta['username'] = $basicUser;
+} else {
+    $meta['hmacUsername'] = $hmacUser;
+}
 
 file_put_contents($metaFile, json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
@@ -103,12 +153,19 @@ $cmd = [
     $phpBin,
     $runner,
     "--env={$env}",
-    "--auth=basic",
-    "--basic-user={$user}",
-    "--basic-password={$pass}",
+    "--auth={$authMode}",
     "--scenario=scenarios/{$scenario}",
     "--csv-log={$csvPath}",
 ];
+
+if ($authMode === 'basic') {
+    $cmd[] = "--basic-user={$basicUser}";
+    $cmd[] = "--basic-password={$basicPass}";
+} else {
+    // These option names must match your run_rest_tests.php parser
+    $cmd[] = "--hmac-user={$hmacUser}";
+    $cmd[] = "--hmac-secret={$hmacSecret}";
+}
 
 $cmdString = implode(' ', array_map('escapeshellarg', $cmd));
 
@@ -138,10 +195,12 @@ echo "<h3>Running REST test</h3>";
 echo "<div>Run: <code>" . htmlspecialchars($runId) . "</code></div>";
 echo "<div>Env: <code>" . htmlspecialchars($env) . "</code></div>";
 echo "<div>Scenario: <code>" . htmlspecialchars($scenario) . "</code></div>";
+echo "<div>Auth: <code>" . htmlspecialchars($authMode) . "</code></div>";
 echo "<div><a href='/runs.php'>Back to runs</a></div>";
 echo "<h4>Live output</h4><pre>";
 
-@ob_flush(); @flush();
+@ob_flush();
+@flush();
 
 $start = time();
 while (true) {
@@ -152,14 +211,16 @@ while (true) {
     if ($o !== false && $o !== '') {
         fwrite($outFp, $o);
         echo htmlspecialchars($o, ENT_NOQUOTES);
-        @ob_flush(); @flush();
+        @ob_flush();
+        @flush();
     }
 
     $e = stream_get_contents($pipes[2]);
     if ($e !== false && $e !== '') {
         fwrite($errFp, $e);
         echo htmlspecialchars($e, ENT_NOQUOTES);
-        @ob_flush(); @flush();
+        @ob_flush();
+        @flush();
     }
 
     if (!$running) {
