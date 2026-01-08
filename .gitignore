@@ -17,3 +17,6 @@ Thumbs.db
 # temp
 tmp/
 *.tmp
+
+# local debug helpers
+public/_whoami.php
