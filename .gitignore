@@ -20,3 +20,6 @@ tmp/
 
 # local debug helpers
 public/_whoami.php
+
+# local debug helpers
+public/_whoami.php
