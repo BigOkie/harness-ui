@@ -95,6 +95,9 @@ $cmd = [
 
 $cmdString = implode(' ', array_map('escapeshellarg', $cmd));
 
+
+$exitFile = $runPath . '/exit_code.txt';
+$cmdString .= ' ; echo $? > ' . escapeshellarg($exitFile);
 $descriptors = [
     0 => ['pipe', 'r'],
     1 => ['pipe', 'w'],

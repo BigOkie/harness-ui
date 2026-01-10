@@ -1,40 +1,53 @@
+sudo tee /srv/harness-ui/config.php >/dev/null <<'PHP'
 <?php
 declare(strict_types=1);
 
 /**
- * Harness UI config (WS suite MVP).
+ * Harness UI config.
  * Keep this file OUTSIDE the web root.
  */
-
 return [
-    // Where the WS harness lives (must be readable/executable by www-data)
-    'ws_harness_dir' => '/usr/local/bin/work/ws-harness-php',
+    // Harness dirs
+    'ws_harness_dir'   => '/usr/local/bin/work/ws-harness-php',
+    'rest_harness_dir' => '/usr/local/bin/work/rest-harness-php',
 
-    // PHP binary to use
+    // PHP binary
     'php_bin' => '/usr/bin/php',
 
     // Where to store per-run output
-    'runs_dir' => '/srv/harness-ui/var/runs',
-
+    'runs_dir'  => '/srv/harness-ui/var/runs',
     'creds_dir' => '/srv/harness-ui/creds',
 
-    // Allowed environments -> WS URL
+    // WS URLs (Pool + routed locations)
     'envs' => [
-        'staging' => 'wss://secure-staging-ws.shieldconex.com',
-        'cert'    => 'wss://secure-cert-ws.shieldconex.com',
-        'prod'    => 'wss://secure-ws.shieldconex.com',
+        'staging' => [
+            'Pool'    => 'wss://secure-staging-ws.shieldconex.com',
+            'Atlanta' => 'wss://secure-staging-ws-atl.shieldconex.com',
+            'Tulsa'   => 'wss://secure-staging-ws-tul.shieldconex.com',
+        ],
+        'cert' => 'wss://secure-cert-ws.shieldconex.com',
+        'prod' => [
+            'Pool'    => 'wss://secure-ws.shieldconex.com',
+            'Atlanta' => 'wss://secure-ws-atl.shieldconex.com',
+            'Tulsa'   => 'wss://secure-ws-tul.shieldconex.com',
+        ],
+    ],
+
+    // REST base URLs (include /api if that’s what the REST harness expects)
+    'rest_envs' => [
+        'staging' => [
+            'Pool'    => 'https://secure-staging.shieldconex.com/api',
+            'Atlanta' => 'https://secure-staging-atl.shieldconex.com/api',
+            'Tulsa'   => 'https://secure-staging-tul.shieldconex.com/api',
+        ],
+        'cert' => 'https://secure-cert.shieldconex.com/api',
+        'prod' => [
+            'Pool'    => 'https://secure.shieldconex.com/api',
+            'Atlanta' => 'https://secure-atl.shieldconex.com/api',
+            'Tulsa'   => 'https://secure-tul.shieldconex.com/api',
+        ],
     ],
 
     // Max runtime (seconds) for one run (PHP-side guard)
     'max_run_seconds' => 300,
-'rest_harness_dir' => '/usr/local/bin/work/rest-harness-php',
-
-// base URLs for REST (edit to match your real endpoints)
-'rest_envs' => [
-    'staging' => 'https://secure-staging.shieldconex.com/api',
-    'cert'    => 'https://secure-cert.shieldconex.com/api',
-    'prod'    => 'https://secure.shieldconex.com/api', // if that’s correct for prod
-],
-
-
 ];

@@ -169,6 +169,9 @@ if ($authMode === 'basic') {
 
 $cmdString = implode(' ', array_map('escapeshellarg', $cmd));
 
+
+$exitFile = $runPath . '/exit_code.txt';
+$cmdString .= ' ; echo $? > ' . escapeshellarg($exitFile);
 $descriptors = [
     0 => ['pipe', 'r'],
     1 => ['pipe', 'w'],
@@ -237,6 +240,17 @@ while (true) {
 
 $exit = proc_close($proc);
 
+
+$exitFromFile = null;
+if (is_file($exitFile)) {
+    $s = trim((string)@file_get_contents($exitFile));
+    if ($s !== '' && preg_match('/^-?\d+$/', $s)) {
+        $exitFromFile = (int)$s;
+    }
+}
+if ($exitFromFile !== null) {
+    $exit = $exitFromFile;
+}
 fclose($outFp);
 fclose($errFp);
 

@@ -8,8 +8,40 @@ if (empty($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(16));
 }
 
-$envs = $config['envs'];
+/**
+ * Normalize env config into a flat list of options.
+ *
+ * Supported config formats:
+ *   1) ['staging' => 'wss://...', 'prod' => 'wss://...']
+ *   2) [
+ *        'staging' => ['Pool' => 'wss://...', 'Atlanta' => 'wss://...'],
+ *        'prod'    => ['Pool' => 'wss://...']
+ *      ]
+ */
+function harnessui_env_options(array $envs): array
+{
+    $out = [];
+    foreach ($envs as $envKey => $v) {
+        if (is_string($v)) {
+            $out[] = ['value' => (string)$envKey, 'label' => (string)$envKey, 'url' => $v];
+            continue;
+        }
+        if (is_array($v)) {
+            foreach ($v as $locLabel => $url) {
+                if (!is_string($url) || $url === '') continue;
+                $value = (string)$envKey . '::' . (string)$locLabel;
+                $label = (string)$envKey . ' - ' . (string)$locLabel;
+                $out[] = ['value' => $value, 'label' => $label, 'url' => $url];
+            }
+        }
+    }
+    usort($out, static fn($a, $b) => strcmp($a['label'], $b['label']));
+    return $out;
+}
 
+$envOptions = harnessui_env_options($config['envs'] ?? []);
+
+// Load Basic credential profiles for WS (WS uses basic only)
 $profiles = [];
 $credsDir = $config['creds_dir'] ?? null;
 if (is_string($credsDir) && is_dir($credsDir)) {
@@ -55,8 +87,10 @@ if (is_string($credsDir) && is_dir($credsDir)) {
 
     <label>Environment</label>
     <select name="env" required>
-      <?php foreach ($envs as $k => $url): ?>
-        <option value="<?= htmlspecialchars($k, ENT_QUOTES) ?>"><?= htmlspecialchars($k) ?> (<?= htmlspecialchars($url) ?>)</option>
+      <?php foreach ($envOptions as $opt): ?>
+        <option value="<?= htmlspecialchars($opt['value'], ENT_QUOTES) ?>">
+          <?= htmlspecialchars($opt['label']) ?> (<?= htmlspecialchars($opt['url']) ?>)
+        </option>
       <?php endforeach; ?>
     </select>
 

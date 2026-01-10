@@ -1,122 +1,82 @@
 <?php
-
 declare(strict_types=1);
 
 session_start();
 $config = require '/srv/harness-ui/bootstrap.php';
 
 if (empty($_SESSION['csrf'])) {
-  $_SESSION['csrf'] = bin2hex(random_bytes(16));
+    $_SESSION['csrf'] = bin2hex(random_bytes(16));
 }
 
-$envs = $config['rest_envs'] ?? ($config['envs'] ?? []); // prefer rest_envs, fallback to envs
+function harnessui_env_options(array $envs): array
+{
+    $out = [];
+    foreach ($envs as $envKey => $v) {
+        if (is_string($v)) {
+            $out[] = ['value' => (string)$envKey, 'label' => (string)$envKey, 'url' => $v];
+            continue;
+        }
+        if (is_array($v)) {
+            foreach ($v as $locLabel => $url) {
+                if (!is_string($url) || $url === '') continue;
+                $value = (string)$envKey . '::' . (string)$locLabel;
+                $label = (string)$envKey . ' - ' . (string)$locLabel;
+                $out[] = ['value' => $value, 'label' => $label, 'url' => $url];
+            }
+        }
+    }
+    usort($out, static fn($a, $b) => strcmp($a['label'], $b['label']));
+    return $out;
+}
 
+$restEnvs    = $config['rest_envs'] ?? [];
+$envOptions  = harnessui_env_options($restEnvs);
+
+// Load credential profiles (basic + optional hmac fields)
 $profiles = [];
 $credsDir = $config['creds_dir'] ?? null;
 if (is_string($credsDir) && is_dir($credsDir)) {
-  foreach (glob($credsDir . '/*.php') ?: [] as $file) {
-    $id = basename($file, '.php');
-    $data = require $file;
+    foreach (glob($credsDir . '/*.php') ?: [] as $file) {
+        $id = basename($file, '.php');
+        $data = require $file;
+        if (!is_array($data)) continue;
 
-    if (!is_array($data)) {
-      continue;
+        $u  = isset($data['username']) ? (string)$data['username'] : '';
+        $pw = isset($data['password']) ? (string)$data['password'] : '';
+
+        $hu = isset($data['hmac_username']) ? (string)$data['hmac_username'] : '';
+        $hs = isset($data['hmac_secret'])   ? (string)$data['hmac_secret']   : '';
+
+        if ($u === '' && $pw === '' && $hu === '' && $hs === '') continue;
+
+        $profiles[$id] = [
+            'label'         => (string)($data['label'] ?? $id),
+            'username'      => $u,
+            'password'      => $pw,
+            'hmac_username' => $hu,
+            'hmac_secret'   => $hs,
+        ];
     }
-
-    $label = (string)($data['label'] ?? $id);
-
-    // Basic
-    $u = isset($data['username']) ? (string)$data['username'] : '';
-    $p = isset($data['password']) ? (string)$data['password'] : '';
-
-    // HMAC (NOTE: we do NOT decode; we pass through exactly as entered in the creds file)
-    $hu = isset($data['hmac_username']) ? (string)$data['hmac_username'] : '';
-    $hs = isset($data['hmac_secret']) ? (string)$data['hmac_secret'] : '';
-
-    $profiles[$id] = [
-      'label' => $label,
-      'username' => $u,
-      'password' => $p,
-      'hmac_username' => $hu,
-      'hmac_secret' => $hs,
-    ];
-  }
-  ksort($profiles);
-}
-
-$scenarios = [];
-$restHarnessDir = (string)($config['rest_harness_dir'] ?? '');
-$scenarioDir = $restHarnessDir !== '' ? ($restHarnessDir . '/scenarios') : '';
-if ($scenarioDir !== '' && is_dir($scenarioDir)) {
-  foreach (glob($scenarioDir . '/*.json') ?: [] as $file) {
-    $scenarios[] = basename($file);
-  }
-  sort($scenarios);
+    ksort($profiles);
 }
 ?>
 <!doctype html>
 <html>
-
 <head>
   <meta charset="utf-8">
-  <title>Harness UI - REST Harness</title>
+  <title>Harness UI - REST</title>
   <style>
-    body {
-      font-family: sans-serif;
-      margin: 24px;
-      max-width: 980px;
-    }
-
-    label {
-      display: block;
-      margin-top: 12px;
-      font-weight: 600;
-    }
-
-    input,
-    select {
-      width: 100%;
-      padding: 8px;
-    }
-
-    button {
-      margin-top: 16px;
-      padding: 10px 14px;
-    }
-
-    .row {
-      display: flex;
-      gap: 12px;
-    }
-
-    .row>div {
-      flex: 1;
-    }
-
-    .hint {
-      color: #555;
-      font-size: 0.95em;
-      margin-top: 6px;
-    }
-
-    .nav {
-      margin-top: 14px;
-    }
-
-    .card {
-      border: 1px solid #ddd;
-      border-radius: 10px;
-      padding: 14px;
-      margin-top: 14px;
-    }
-
-    code {
-      background: #f5f5f5;
-      padding: 2px 6px;
-      border-radius: 6px;
-    }
+    body { font-family: sans-serif; margin: 24px; max-width: 1000px; }
+    label { display:block; margin-top: 12px; }
+    input, select { width: 100%; padding: 8px; }
+    button { margin-top: 16px; padding: 10px 14px; }
+    .row { display:flex; gap: 12px; }
+    .row > div { flex: 1; }
+    .hint { color:#555; font-size: 0.95em; }
+    .nav { margin-top: 14px; }
+    .hidden { display:none; }
   </style>
 </head>
-
 <body>
   <h2>REST Harness Runner</h2>
 
@@ -127,149 +87,127 @@ if ($scenarioDir !== '' && is_dir($scenarioDir)) {
   <form method="post" action="/run_rest.php" autocomplete="off">
     <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION['csrf'], ENT_QUOTES) ?>">
 
-    <div class="card">
-      <label>Environment</label>
-      <select name="env" required>
-        <?php foreach ($envs as $k => $url): ?>
-          <option value="<?= htmlspecialchars((string)$k, ENT_QUOTES) ?>">
-            <?= htmlspecialchars((string)$k) ?> (<?= htmlspecialchars((string)$url) ?>)
-          </option>
-        <?php endforeach; ?>
-      </select>
+    <label>Environment</label>
+    <select name="env" required>
+      <?php foreach ($envOptions as $opt): ?>
+        <option value="<?= htmlspecialchars($opt['value'], ENT_QUOTES) ?>">
+          <?= htmlspecialchars($opt['label']) ?> (<?= htmlspecialchars($opt['url']) ?>)
+        </option>
+      <?php endforeach; ?>
+    </select>
 
-      <label>Scenario</label>
-      <select name="scenario" required>
-        <?php if ($scenarios): ?>
-          <?php foreach ($scenarios as $s): ?>
-            <option value="<?= htmlspecialchars($s, ENT_QUOTES) ?>"><?= htmlspecialchars($s) ?></option>
-          <?php endforeach; ?>
-        <?php else: ?>
-          <option value="rest_scenarios_basic.json">rest_scenarios_basic.json</option>
-        <?php endif; ?>
-      </select>
+    <label>Default auth method</label>
+    <select id="auth" name="auth">
+      <option value="basic">basic</option>
+      <option value="hmac">hmac</option>
+    </select>
 
-      <label>Auth method</label>
-      <select id="auth_mode" name="auth_mode" required>
-        <option value="basic">basic</option>
-        <option value="hmac">hmac</option>
-      </select>
+    <label>Scenario file</label>
+    <select name="scenario" required>
+      <option value="rest_scenarios_basic.json">rest_scenarios_basic.json</option>
+      <option value="rest_scenarios_hmac.json">rest_scenarios_hmac.json</option>
+    </select>
 
-      <label>Credential profile</label>
-      <select id="profile" name="profile">
-        <option value="">(manual)</option>
-        <?php foreach ($profiles as $id => $p): ?>
-          <option
-            value="<?= htmlspecialchars($id, ENT_QUOTES) ?>"
-            data-basic-u="<?= htmlspecialchars((string)$p['username'], ENT_QUOTES) ?>"
-            data-basic-p="<?= htmlspecialchars((string)$p['password'], ENT_QUOTES) ?>"
-            data-hmac-u="<?= htmlspecialchars((string)$p['hmac_username'], ENT_QUOTES) ?>"
-            data-hmac-s="<?= htmlspecialchars((string)$p['hmac_secret'], ENT_QUOTES) ?>"><?= htmlspecialchars((string)$p['label']) ?></option>
-        <?php endforeach; ?>
-      </select>
-      <div class="hint">
-        Profile selection populates fields for the selected auth mode.
+    <label>Credential profile</label>
+    <select id="profile" name="profile">
+      <option value="">(manual)</option>
+      <?php foreach ($profiles as $id => $p): ?>
+        <option
+          value="<?= htmlspecialchars($id, ENT_QUOTES) ?>"
+          data-u="<?= htmlspecialchars($p['username'], ENT_QUOTES) ?>"
+          data-p="<?= htmlspecialchars($p['password'], ENT_QUOTES) ?>"
+          data-hu="<?= htmlspecialchars($p['hmac_username'], ENT_QUOTES) ?>"
+          data-hs="<?= htmlspecialchars($p['hmac_secret'], ENT_QUOTES) ?>"
+        ><?= htmlspecialchars($p['label']) ?></option>
+      <?php endforeach; ?>
+    </select>
+
+    <div id="basic_fields" class="row">
+      <div>
+        <label>Basic username</label>
+        <input id="basic_user" name="basic_user">
+      </div>
+      <div>
+        <label>Basic password</label>
+        <input id="basic_pass" name="basic_pass" type="password">
       </div>
     </div>
 
-    <div class="card" id="basic_fields">
-      <div class="row">
-        <div>
-          <label>Basic username</label>
-          <input id="basic_username" name="basic_username" placeholder="e.g. bluefin">
-        </div>
-        <div>
-          <label>Basic password</label>
-          <input id="basic_password" name="basic_password" type="password">
-        </div>
+    <div id="hmac_fields" class="row hidden">
+      <div>
+        <label>HMAC username</label>
+        <input id="hmac_user" name="hmac_user">
+      </div>
+      <div>
+        <label>HMAC secret (base64)</label>
+        <input id="hmac_secret" name="hmac_secret" type="password">
       </div>
     </div>
 
-    <div class="card" id="hmac_fields" style="display:none">
-      <div class="row">
-        <div>
-          <label>HMAC username</label>
-          <input id="hmac_username" name="hmac_username" placeholder="e.g. bluefin_qa_hmac">
-        </div>
-        <div>
-          <label>HMAC secret</label>
-          <input id="hmac_secret" name="hmac_secret" type="password" placeholder="Paste the secret exactly as provided (no decoding)">
-        </div>
-      </div>
-      <div class="hint">
-        Note: the UI passes this value through as-is to the backend runner. (If your backend expects base64, keep base64.)
-      </div>
+    <div class="hint" style="margin-top:10px;">
+      Selecting a profile fills fields for the currently selected auth method.
+      Switch auth and it will re-apply from the selected profile (if present).
     </div>
 
-    <button type="submit">Run REST Suite</button>
+    <button type="submit">Run REST Tests</button>
   </form>
 
   <script>
-    (function() {
-      const auth = document.getElementById('auth_mode');
-      const prof = document.getElementById('profile');
+    (function () {
+      const selProfile = document.getElementById('profile');
+      const selAuth    = document.getElementById('auth');
 
-      const basicBox = document.getElementById('basic_fields');
-      const hmacBox = document.getElementById('hmac_fields');
+      const basicWrap  = document.getElementById('basic_fields');
+      const hmacWrap   = document.getElementById('hmac_fields');
 
-      const bu = document.getElementById('basic_username');
-      const bp = document.getElementById('basic_password');
-      const hu = document.getElementById('hmac_username');
-      const hs = document.getElementById('hmac_secret');
+      const basicUser  = document.getElementById('basic_user');
+      const basicPass  = document.getElementById('basic_pass');
 
-      function selectedOpt() {
-        return prof.options[prof.selectedIndex] || null;
+      const hmacUser   = document.getElementById('hmac_user');
+      const hmacSecret = document.getElementById('hmac_secret');
+
+      function applyVisibility() {
+        const mode = (selAuth.value || 'basic').toLowerCase();
+        if (mode === 'hmac') {
+          basicWrap.classList.add('hidden');
+          hmacWrap.classList.remove('hidden');
+        } else {
+          hmacWrap.classList.add('hidden');
+          basicWrap.classList.remove('hidden');
+        }
       }
 
-      function populateFromProfile() {
-        const opt = selectedOpt();
+      function applyFromProfile() {
+        const opt = selProfile.options[selProfile.selectedIndex];
         if (!opt) return;
 
-        const mode = auth.value || 'basic';
+        const mode = (selAuth.value || 'basic').toLowerCase();
 
-        if (mode === 'basic') {
-          const u = opt.getAttribute('data-basic-u') || '';
-          const p = opt.getAttribute('data-basic-p') || '';
-          if (u) bu.value = u;
-          if (p) bp.value = p;
+        if (mode === 'hmac') {
+          const hu = opt.getAttribute('data-hu') || '';
+          const hs = opt.getAttribute('data-hs') || '';
+          if (hu) hmacUser.value = hu;
+          if (hs) hmacSecret.value = hs;
         } else {
-          const u = opt.getAttribute('data-hmac-u') || '';
-          const s = opt.getAttribute('data-hmac-s') || '';
-          if (u) hu.value = u;
-          if (s) hs.value = s;
+          const u = opt.getAttribute('data-u') || '';
+          const p = opt.getAttribute('data-p') || '';
+          if (u) basicUser.value = u;
+          if (p) basicPass.value = p;
         }
       }
 
-      function toggleMode() {
-        const mode = auth.value || 'basic';
+      selProfile.addEventListener('change', () => {
+        applyFromProfile();
+      });
 
-        if (mode === 'basic') {
-          basicBox.style.display = '';
-          hmacBox.style.display = 'none';
-          bu.required = true;
-          bp.required = true;
-          hu.required = false;
-          hs.required = false;
-        } else {
-          basicBox.style.display = 'none';
-          hmacBox.style.display = '';
-          bu.required = false;
-          bp.required = false;
-          hu.required = true;
-          hs.required = true;
-        }
+      selAuth.addEventListener('change', () => {
+        applyVisibility();
+        applyFromProfile();
+      });
 
-        // When switching modes, re-populate from the chosen profile (if any)
-        if (prof.value) {
-          populateFromProfile();
-        }
-      }
-
-      auth.addEventListener('change', toggleMode);
-      prof.addEventListener('change', populateFromProfile);
-
-      toggleMode();
+      // init
+      applyVisibility();
     })();
   </script>
 </body>
-
 </html>
