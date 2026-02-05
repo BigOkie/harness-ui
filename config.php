@@ -1,4 +1,3 @@
-sudo tee /srv/harness-ui/config.php >/dev/null <<'PHP'
 <?php
 declare(strict_types=1);
 

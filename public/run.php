@@ -12,6 +12,47 @@ function fail(int $code, string $msg): never {
     exit;
 }
 
+/**
+ * Resolve an env selection into a URL.
+ *
+ * Supported config formats:
+ *  1) ['staging' => 'wss://...', 'prod' => 'wss://...']
+ *  2) [
+ *       'staging' => ['Pool' => 'wss://...', 'Atlanta' => 'wss://...'],
+ *       'prod'    => ['Pool' => 'wss://...']
+ *     ]
+ *
+ * Supported UI values:
+ *  - "staging" (string env key)
+ *  - "staging::Pool" (env + location)
+ */
+function harnessui_resolve_env_url(array $envs, string $selected): ?string
+{
+    $selected = trim($selected);
+    if ($selected === '') return null;
+
+    // Exact match for simple string envs (and also allows "cert" etc)
+    if (array_key_exists($selected, $envs) && is_string($envs[$selected]) && $envs[$selected] !== '') {
+        return $envs[$selected];
+    }
+
+    // Nested "env::Location"
+    if (str_contains($selected, '::')) {
+        [$envKey, $locLabel] = explode('::', $selected, 2);
+        $envKey = trim($envKey);
+        $locLabel = trim($locLabel);
+
+        if ($envKey !== '' && $locLabel !== '' && isset($envs[$envKey]) && is_array($envs[$envKey])) {
+            $v = $envs[$envKey];
+            if (array_key_exists($locLabel, $v) && is_string($v[$locLabel]) && $v[$locLabel] !== '') {
+                return $v[$locLabel];
+            }
+        }
+    }
+
+    return null;
+}
+
 if (($_POST['csrf'] ?? '') !== ($_SESSION['csrf'] ?? '')) {
     fail(403, 'CSRF failed');
 }
@@ -20,15 +61,23 @@ $env  = (string)($_POST['env'] ?? '');
 $user = trim((string)($_POST['username'] ?? ''));
 $pass = (string)($_POST['password'] ?? '');
 
+if ($env === '') {
+    fail(400, 'Missing env');
+}
 if ($user === '' || $pass === '') {
     fail(400, 'Missing username/password');
 }
 
-if (!isset($config['envs'][$env])) {
-    fail(400, 'Invalid env');
+// Resolve URL from config (supports new multi-location format)
+$envs = $config['envs'] ?? [];
+if (!is_array($envs)) {
+    fail(500, 'Config envs is not an array');
 }
 
-$url = (string)$config['envs'][$env];
+$url = harnessui_resolve_env_url($envs, $env);
+if ($url === null) {
+    fail(400, 'Invalid env');
+}
 
 // conservative username validation
 if (!preg_match('/^[a-zA-Z0-9._-]{1,64}$/', $user)) {
@@ -37,10 +86,10 @@ if (!preg_match('/^[a-zA-Z0-9._-]{1,64}$/', $user)) {
 
 $creds = $user . ':' . $pass;
 
-$harnessDir = (string)$config['ws_harness_dir'];
-$phpBin     = (string)$config['php_bin'];
-$runsDir    = (string)$config['runs_dir'];
-$maxRun     = (int)$config['max_run_seconds'];
+$harnessDir = (string)($config['ws_harness_dir'] ?? '');
+$phpBin     = (string)($config['php_bin'] ?? '/usr/bin/php');
+$runsDir    = (string)($config['runs_dir'] ?? '/srv/harness-ui/var/runs');
+$maxRun     = (int)($config['max_run_seconds'] ?? 300);
 
 $runner = $harnessDir . '/bin/run_ws_suite.php';
 if (!is_dir($harnessDir) || !is_file($runner)) {
@@ -95,9 +144,10 @@ $cmd = [
 
 $cmdString = implode(' ', array_map('escapeshellarg', $cmd));
 
-
+// Work around proc_close() returning -1 by capturing $?
 $exitFile = $runPath . '/exit_code.txt';
 $cmdString .= ' ; echo $? > ' . escapeshellarg($exitFile);
+
 $descriptors = [
     0 => ['pipe', 'r'],
     1 => ['pipe', 'w'],
@@ -131,8 +181,6 @@ echo "<h4>Live output</h4><pre>";
 @ob_flush(); @flush();
 
 $start = time();
-$finalExit = null;
-
 while (true) {
     $status  = proc_get_status($proc);
     $running = $status['running'];
@@ -151,11 +199,7 @@ while (true) {
         @ob_flush(); @flush();
     }
 
-    if (!$running) {
-        // proc_close() often returns -1; grab the last known exitcode here
-        $finalExit = $status['exitcode'] ?? null;
-        break;
-    }
+    if (!$running) break;
 
     if ((time() - $start) > $maxRun) {
         proc_terminate($proc);
@@ -165,25 +209,16 @@ while (true) {
     usleep(100000);
 }
 
-// drain any remaining output
-while (true) {
-    $o = stream_get_contents($pipes[1]);
-    $e = stream_get_contents($pipes[2]);
-    if (($o === false || $o === '') && ($e === false || $e === '')) break;
-    if ($o !== false && $o !== '') {
-        fwrite($outFp, $o);
-        echo htmlspecialchars($o, ENT_NOQUOTES);
-    }
-    if ($e !== false && $e !== '') {
-        fwrite($errFp, $e);
-        echo htmlspecialchars($e, ENT_NOQUOTES);
-    }
-    @ob_flush(); @flush();
-    usleep(20000);
-}
-
+// close + read captured exit code
 $closeExit = proc_close($proc);
-$exit = ($finalExit !== null && $finalExit >= 0) ? (int)$finalExit : (int)$closeExit;
+
+$exit = $closeExit;
+if (is_file($exitFile)) {
+    $s = trim((string)@file_get_contents($exitFile));
+    if ($s !== '' && preg_match('/^-?\d+$/', $s)) {
+        $exit = (int)$s;
+    }
+}
 
 fclose($outFp);
 fclose($errFp);
