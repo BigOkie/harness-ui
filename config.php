@@ -39,7 +39,15 @@ return [
             'Atlanta' => 'https://secure-staging-atl.shieldconex.com/api',
             'Tulsa'   => 'https://secure-staging-tul.shieldconex.com/api',
         ],
-        'cert' => 'https://secure-cert.shieldconex.com/api',
+        'cert' => [
+            'Global Pool' => 'https://secure-cert.shieldconex.com/api',
+            'Regional US' => 'https://secure-cert.shieldconex.us/api',
+            'Regional EU' => 'https://secure-cert.shieldconex.eu/api',
+            'Site FRA'    => 'https://secure-cert-de.shieldconex.eu/api',
+            'Site DUB'    => 'https://secure-cert-ie.shieldconex.eu/api',
+            'Cloud FRA'   => 'https://secure-cert-de.cloud.shieldconex.com/api',
+            'Cloud DUB'   => 'https://secure-cert-ie.cloud.shieldconex.com/api',
+        ],
         'prod' => [
             'Pool'    => 'https://secure.shieldconex.com/api',
             'Atlanta' => 'https://secure-atl.shieldconex.com/api',

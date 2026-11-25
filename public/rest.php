@@ -32,6 +32,19 @@ function harnessui_env_options(array $envs): array
 $restEnvs    = $config['rest_envs'] ?? [];
 $envOptions  = harnessui_env_options($restEnvs);
 
+// Discover REST scenario files
+$scenarios = [];
+$restDir = (string)($config['rest_harness_dir'] ?? '');
+
+if ($restDir !== '' && is_dir($restDir . '/scenarios')) {
+    foreach (glob($restDir . '/scenarios/rest_scenarios_*.json') ?: [] as $file) {
+        if (is_file($file) && is_readable($file)) {
+            $scenarios[] = basename($file);
+        }
+    }
+    sort($scenarios, SORT_STRING);
+}
+
 // Load credential profiles (basic + optional hmac fields)
 $profiles = [];
 $credsDir = $config['creds_dir'] ?? null;
@@ -104,8 +117,11 @@ if (is_string($credsDir) && is_dir($credsDir)) {
 
     <label>Scenario file</label>
     <select name="scenario" required>
-      <option value="rest_scenarios_basic.json">rest_scenarios_basic.json</option>
-      <option value="rest_scenarios_hmac.json">rest_scenarios_hmac.json</option>
+      <?php foreach ($scenarios as $scenario): ?>
+        <option value="<?= htmlspecialchars($scenario, ENT_QUOTES, 'UTF-8') ?>">
+          <?= htmlspecialchars($scenario, ENT_QUOTES, 'UTF-8') ?>
+        </option>
+      <?php endforeach; ?>
       </select>
 
 
