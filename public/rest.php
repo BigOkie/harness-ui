@@ -106,7 +106,8 @@ if (is_string($credsDir) && is_dir($credsDir)) {
     <select name="scenario" required>
       <option value="rest_scenarios_basic.json">rest_scenarios_basic.json</option>
       <option value="rest_scenarios_hmac.json">rest_scenarios_hmac.json</option>
-    </select>
+      </select>
+
 
     <label>Credential profile</label>
     <select id="profile" name="profile">
@@ -186,13 +187,13 @@ if (is_string($credsDir) && is_dir($credsDir)) {
         if (mode === 'hmac') {
           const hu = opt.getAttribute('data-hu') || '';
           const hs = opt.getAttribute('data-hs') || '';
-          if (hu) hmacUser.value = hu;
-          if (hs) hmacSecret.value = hs;
+          hmacUser.value = hu;
+          hmacSecret.value = hs;
         } else {
           const u = opt.getAttribute('data-u') || '';
           const p = opt.getAttribute('data-p') || '';
-          if (u) basicUser.value = u;
-          if (p) basicPass.value = p;
+          basicUser.value = u;
+          basicPass.value = p;
         }
       }
 

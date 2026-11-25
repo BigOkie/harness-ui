@@ -65,41 +65,20 @@ if (($_POST['csrf'] ?? '') !== ($_SESSION['csrf'] ?? '')) {
 
 $env      = (string)($_POST['env'] ?? '');
 $scenario = basename((string)($_POST['scenario'] ?? ''));
-$profile  = (string)($_POST['profile'] ?? '');
 
-$authMode = strtolower(trim((string)($_POST['auth_mode'] ?? 'basic')));
+$authMode = strtolower(trim((string)($_POST['auth'] ?? 'basic')));
 if (!in_array($authMode, ['basic', 'hmac'], true)) {
-    $authMode = 'basic';
+    fail(400, 'Invalid authentication mode');
 }
 
-// Manual fields (we keep both sets; which set is required depends on authMode)
-$basicUser = trim((string)($_POST['basic_username'] ?? ''));
-$basicPass = (string)($_POST['basic_password'] ?? '');
+// Manual authentication fields from rest.php
+$basicUser = trim((string)($_POST['basic_user'] ?? ''));
+$basicPass = (string)($_POST['basic_pass'] ?? '');
 
-$hmacUser   = trim((string)($_POST['hmac_username'] ?? ''));
+$hmacUser   = trim((string)($_POST['hmac_user'] ?? ''));
 $hmacSecret = (string)($_POST['hmac_secret'] ?? '');
-
 if ($env === '' || $scenario === '') {
     fail(400, 'Missing required fields');
-}
-
-// Optional: load profile if selected (populate whichever keys exist)
-if ($profile !== '') {
-    $credsDir    = (string)($config['creds_dir'] ?? '');
-    $profileFile = $credsDir . '/' . basename($profile) . '.php';
-    if (is_file($profileFile)) {
-        $p = require $profileFile;
-        if (is_array($p)) {
-            if (isset($p['username'], $p['password'])) {
-                $basicUser = (string)$p['username'];
-                $basicPass = (string)$p['password'];
-            }
-            if (isset($p['hmac_username'], $p['hmac_secret'])) {
-                $hmacUser   = (string)$p['hmac_username'];
-                $hmacSecret = (string)$p['hmac_secret']; // pass-through as-is (no decoding)
-            }
-        }
-    }
 }
 
 // REST envs can now be nested (Pool/Atlanta/Tulsa)
@@ -111,7 +90,8 @@ $baseUrl = harnessui_resolve_env_url($restEnvs, $env);
 if ($baseUrl === null) {
     fail(400, 'Invalid env');
 }
-
+// Extract the environment name for the backend CLI.
+$envKey = trim(explode('::', $env, 2)[0]);
 if ($authMode === 'basic') {
     if ($basicUser === '' || $basicPass === '') {
         fail(400, 'Missing basic username/password');
@@ -186,12 +166,13 @@ file_put_contents($metaFile, json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAP
 $cmd = [
     $phpBin,
     $runner,
-    "--env={$env}",
+    "--env={$envKey}",
+    "--base-url={$baseUrl}",
     "--auth={$authMode}",
     "--scenario=scenarios/{$scenario}",
     "--csv-log={$csvPath}",
+    "--state-file=" . dirname($csvPath) . "/state.json",
 ];
-
 if ($authMode === 'basic') {
     $cmd[] = "--basic-user={$basicUser}";
     $cmd[] = "--basic-password={$basicPass}";
