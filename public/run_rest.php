@@ -64,7 +64,14 @@ if (($_POST['csrf'] ?? '') !== ($_SESSION['csrf'] ?? '')) {
 }
 
 $env      = (string)($_POST['env'] ?? '');
-$scenario = basename((string)($_POST['scenario'] ?? ''));
+$scenario = $_POST['scenario'] ?? '';
+
+if (
+    !is_string($scenario) ||
+    !preg_match('/\Arest_scenarios_[a-zA-Z0-9_-]+\.json\z/', $scenario)
+) {
+    fail(400, 'Invalid scenario filename');
+}
 
 $authMode = strtolower(trim((string)($_POST['auth'] ?? 'basic')));
 if (!in_array($authMode, ['basic', 'hmac'], true)) {
@@ -109,13 +116,28 @@ $runsDir = (string)($config['runs_dir'] ?? '/srv/harness-ui/var/runs');
 $maxRun  = (int)($config['max_run_seconds'] ?? 300);
 
 $runner = $restDir . '/bin/run_rest_tests.php';
-$scenarioPath = $restDir . '/scenarios/' . $scenario;
 
 if (!is_file($runner)) {
     fail(500, "Runner not found: {$runner}");
 }
-if (!is_file($scenarioPath)) {
-    fail(400, "Scenario not found: {$scenario}");
+
+// Resolve and validate the scenario directory.
+$scenarioDir = realpath($restDir . '/scenarios');
+
+if ($scenarioDir === false || !is_dir($scenarioDir)) {
+    fail(500, 'Scenario directory not found');
+}
+
+// Resolve the requested scenario file.
+$scenarioPath = realpath($scenarioDir . '/' . $scenario);
+
+if (
+    $scenarioPath === false ||
+    !is_file($scenarioPath) ||
+    !is_readable($scenarioPath) ||
+    dirname($scenarioPath) !== $scenarioDir
+) {
+    fail(400, 'Invalid or inaccessible scenario file');
 }
 
 umask(007);

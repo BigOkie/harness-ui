@@ -32,16 +32,29 @@ function harnessui_env_options(array $envs): array
 $restEnvs    = $config['rest_envs'] ?? [];
 $envOptions  = harnessui_env_options($restEnvs);
 
-// Discover REST scenario files
+// Discover and validate REST scenario files.
 $scenarios = [];
 $restDir = (string)($config['rest_harness_dir'] ?? '');
+$scenarioDir = $restDir !== ''
+    ? realpath($restDir . '/scenarios')
+    : false;
 
-if ($restDir !== '' && is_dir($restDir . '/scenarios')) {
-    foreach (glob($restDir . '/scenarios/rest_scenarios_*.json') ?: [] as $file) {
-        if (is_file($file) && is_readable($file)) {
-            $scenarios[] = basename($file);
+if ($scenarioDir !== false && is_dir($scenarioDir)) {
+    foreach (glob($scenarioDir . '/rest_scenarios_*.json') ?: [] as $file) {
+        $filename = basename($file);
+        $resolved = realpath($file);
+
+        if (
+            preg_match('/\Arest_scenarios_[a-zA-Z0-9_-]+\.json\z/', $filename) &&
+            $resolved !== false &&
+            is_file($resolved) &&
+            is_readable($resolved) &&
+            dirname($resolved) === $scenarioDir
+        ) {
+            $scenarios[] = $filename;
         }
     }
+
     sort($scenarios, SORT_STRING);
 }
 
